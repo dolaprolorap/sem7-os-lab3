@@ -1,0 +1,9 @@
+version: '3.41'
+
+tasks:
+  build:
+    cmds:
+      - cmake . -B build && make -C build
+  build-run:
+    cmds:
+      - cmake . -B build && make -C build && ./build/lab3
