@@ -3,8 +3,6 @@
 
 #include <stdbool.h>
 
-void start_main_program(bool full_access);
-void set_counter(int value);
-void clear_memory(void);
+void start_main(int argc, char *argv[]);
 
 #endif // PROGRAM_H

@@ -8,6 +8,7 @@ if(WIN32)
 
     set(SOURCE 
         "src/win/program.c"
+        "src/win/logger.c"
         "src/main.c"
     )
 
@@ -31,5 +32,4 @@ target_link_libraries(lab3 ${EXTRA_LIBS})
 
 target_include_directories(lab3 PRIVATE ${INCLUDE_DIRS})
 
-target_compile_options(lab3 PUBLIC -std=c17)
-
+target_compile_options(lab3 PUBLIC -std=c11)

@@ -4,6 +4,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "port.h"
+#include "logger.h"
 
 typedef struct {
     unsigned int counter;
@@ -21,13 +23,22 @@ HANDLE job;
 
 void init_shared_memory()
 {
+    HANDLE hMap = CreateFileMappingA(
+        INVALID_HANDLE_VALUE,
+        NULL,
+        PAGE_READWRITE,
+        0,
+        4096,
+        "my_shm"
+    );
+
     hMap = CreateFileMappingA(
         INVALID_HANDLE_VALUE,
         NULL,
         PAGE_READWRITE,
         0,
         sizeof(shared_data_t),
-        "Global\\my_shm"
+        "my_shm"
     );
 
     shared = (shared_data_t *)MapViewOfFile(
@@ -37,13 +48,9 @@ void init_shared_memory()
         sizeof(shared_data_t)
     );
 
-    counter_sem = CreateSemaphoreA(NULL, 1, 1, "Global\\counter_sem");
-    sub1_sem    = CreateSemaphoreA(NULL, 1, 1, "Global\\sub1_sem");
-    sub2_sem    = CreateSemaphoreA(NULL, 1, 1, "Global\\sub2_sem");
-
-    shared->counter = 0;
-    shared->subprogram_1_finished = 1;
-    shared->subprogram_2_finished = 1;
+    counter_sem = CreateSemaphoreA(NULL, 1, 1, "counter_sem");
+    sub1_sem = CreateSemaphoreA(NULL, 1, 1, "sub1_sem");
+    sub2_sem = CreateSemaphoreA(NULL, 1, 1, "sub2_sem");
 }
 
 void increment_counter_process()
@@ -60,7 +67,7 @@ void log_counter_process()
 {
     while (1) {
         WaitForSingleObject(counter_sem, INFINITE);
-        printf("Counter: %u\n", shared->counter);
+        print_counter(shared->counter);
         ReleaseSemaphore(counter_sem, 1, NULL);
         Sleep(1000);
     }
@@ -68,30 +75,30 @@ void log_counter_process()
 
 void sub_program_1_process()
 {
+    print_subprogram_message(1, false);
+
     WaitForSingleObject(sub1_sem, INFINITE);
     shared->subprogram_1_finished = 0;
     ReleaseSemaphore(sub1_sem, 1, NULL);
-
-    printf("Subprogram 1 start\n");
 
     WaitForSingleObject(counter_sem, INFINITE);
     shared->counter += 10;
     ReleaseSemaphore(counter_sem, 1, NULL);
 
-    printf("Subprogram 1 end\n");
-
     WaitForSingleObject(sub1_sem, INFINITE);
     shared->subprogram_1_finished = 1;
     ReleaseSemaphore(sub1_sem, 1, NULL);
+
+    print_subprogram_message(1, true);
 }
 
 void sub_program_2_process()
 {
+    print_subprogram_message(2, false);
+
     WaitForSingleObject(sub2_sem, INFINITE);
     shared->subprogram_2_finished = 0;
     ReleaseSemaphore(sub2_sem, 1, NULL);
-
-    printf("Subprogram 2 start\n");
 
     WaitForSingleObject(counter_sem, INFINITE);
     shared->counter *= 2;
@@ -103,11 +110,34 @@ void sub_program_2_process()
     shared->counter /= 2;
     ReleaseSemaphore(counter_sem, 1, NULL);
 
-    printf("Subprogram 2 end\n");
-
     WaitForSingleObject(sub2_sem, INFINITE);
     shared->subprogram_2_finished = 1;
     ReleaseSemaphore(sub2_sem, 1, NULL);
+
+    print_subprogram_message(2, true);
+}
+
+void sub_program_process()
+{
+    while (1) {
+        Sleep(3000);
+
+        WaitForSingleObject(sub1_sem, INFINITE);
+        WaitForSingleObject(sub2_sem, INFINITE);
+
+        int ready = shared->subprogram_1_finished &&
+                    shared->subprogram_2_finished;
+
+        ReleaseSemaphore(sub1_sem, 1, NULL);
+        ReleaseSemaphore(sub2_sem, 1, NULL);
+
+        if (ready) {
+            spawn_process("sub1");
+            spawn_process("sub2");
+        } else {
+            write_log("Не все экземпляры подпрограммы завершили выполнение\n");
+        }
+    }
 }
 
 void spawn_process(const char *mode)
@@ -116,7 +146,7 @@ void spawn_process(const char *mode)
     PROCESS_INFORMATION pi;
 
     char cmd[256];
-    snprintf(cmd, sizeof(cmd), "program.exe %s", mode);
+    snprintf(cmd, sizeof(cmd), "lab3.exe %s", mode);
 
     CreateProcessA(
         NULL,
@@ -135,18 +165,10 @@ void spawn_process(const char *mode)
     CloseHandle(pi.hProcess);
 }
 
-BOOL WINAPI console_handler(DWORD sig)
+void start_main(int argc, char *argv[])
 {
-    if (sig == CTRL_C_EVENT) {
-        TerminateJobObject(job, 0);
-        ExitProcess(0);
-    }
-    return TRUE;
-}
-
-int main(int argc, char *argv[])
-{
-    SetConsoleCtrlHandler(console_handler, TRUE);
+    SetConsoleOutputCP(CP_UTF8);
+    SetConsoleCP(CP_UTF8);
 
     job = CreateJobObject(NULL, NULL);
 
@@ -157,36 +179,66 @@ int main(int argc, char *argv[])
             increment_counter_process();
         else if (strcmp(argv[1], "logger") == 0)
             log_counter_process();
+        else if (strcmp(argv[1], "sub") == 0)
+            sub_program_process();
         else if (strcmp(argv[1], "sub1") == 0)
             sub_program_1_process();
         else if (strcmp(argv[1], "sub2") == 0)
             sub_program_2_process();
 
-        return 0;
+        return;
     }
+
+	printf("s - запустить вручную программу, с <number> - установить значение счетчика, e - завершить\n");
+
+    print_program_greeting();
 
     init_shared_memory();
 
+    shared->counter = 0;
+    shared->subprogram_1_finished = 1;
+    shared->subprogram_2_finished = 1;
+
     spawn_process("incrementer");
     spawn_process("logger");
+    spawn_process("sub");
 
-    while (1) {
-        Sleep(3000);
+	while(1)
+	{
+		char command[30];
+		fgets(command, sizeof(command), stdin);
 
-        WaitForSingleObject(sub1_sem, INFINITE);
-        WaitForSingleObject(sub2_sem, INFINITE);
+		if (command[0] == 's' || command[0] == 'S')
+		{
+            spawn_process("incrementer");
+			printf("Вручную запущена программа\n");
+		}
+		
+		if (command[0] == 'c' || command[0] == 'C')
+		{
+			char* end;
+			
+			long new_counter = strtol(command + 1, &end, 10);
 
-        int ready = shared->subprogram_1_finished &&
-                    shared->subprogram_2_finished;
+			if (command + 1 == end) 
+			{
+				printf("Невалидная команда\n");
+			}
+			else 
+			{
+                WaitForSingleObject(counter_sem, INFINITE);
+                shared->counter = new_counter;
+                ReleaseSemaphore(counter_sem, 1, NULL);
+				printf("Вручную установлено значение счетчика: %d\n", new_counter);
+			}
+		}
 
-        ReleaseSemaphore(sub1_sem, 1, NULL);
-        ReleaseSemaphore(sub2_sem, 1, NULL);
+		if (command[0] == 'e' || command[0] == 'E')
+		{
+			break;
+		}
+	}
 
-        if (ready) {
-            spawn_process("sub1");
-            spawn_process("sub2");
-        } else {
-            printf("Subprograms still running\n");
-        }
-    }
+    TerminateJobObject(job, 0);
+    ExitProcess(0);
 }
